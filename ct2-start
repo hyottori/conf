@@ -1,0 +1,90 @@
+#!/bin/bash
+S=ct2-servers
+C=~/ct/careertrek2
+CONTAINERS='mysql localstack elasticsearch logstash-candidate logstash-job localstack_initializer localstack'
+
+DIR_FMT="%s-client"
+TARGET_FMT="classes:%s"
+
+cd $C
+
+function running {
+  "$(docker inspect -f '{{.State.Running}}' mysql 2> /dev/null)"
+}
+
+function rebuild {
+  echo "Launching containers..."
+  echo "$(docker-compose up -d $CONTAINERS)"
+  echo "Rebuilding api..."
+  for target in $@; do
+    echo "$(yarn generate:classes:$target)"
+  done
+  echo "Restoring database..."
+  echo "$(./gradlew flywayClean flywayMigrate jooqGenerate)"
+  echo "$(./careertrek.sh restore)"
+  echo "Recreating elasticsearch..."
+  echo "$(./gradlew elasticRecreate elasticGenerate)" 
+  echo "Finished rebuilding!"
+}
+
+function start {
+  echo "Launching $1..."
+
+  tmux -2 new-session -d -A -s $1
+  tmux new-window -k -t $1:0 -n oauth "./gradlew $1-oauth:bootRun" && tmux set -t $1:0 remain-on-exit on
+  tmux new-window -k -t $1:1 -n api "./gradlew $1-api:bootRun" && tmux set -t $1:1 remain-on-exit on
+  tmux new-window -k -t $1:2 -n client "cd $1-client && yarn start" && tmux set -t $1:2 remain-on-exit on
+
+  echo "Finished!"
+}
+
+apps=()
+is_rebuild=true
+if running; then
+  is_rebuild=false
+fi
+
+while getopts ":creatf" opt; do
+  case ${opt} in
+    c)
+      apps+=("candidate")
+      ;;
+    r)
+      apps+=("business")
+      ;;
+    e)
+      apps+=("agent")
+      ;;
+    a)
+      apps+=("admin")
+      ;; 
+    t)
+      echo "Launching test..."
+      echo "$(docker-compose -f docker-compose-test-db.yml up -d --remove-orphans)"
+      echo "Finished!"
+      exit 0
+      ;;
+    f)
+      is_rebuild=true
+      ;;
+    ?)
+      echo "usage: $0 [-c] [-r] [-e] [-a] [-t] [-f]"
+      echo "-c: candidate"
+      echo "-r: cRs/business"
+      echo "-e: Ess/agent"
+      echo "-a: Admin"
+      echo "-t: Test"
+      echo "-f: force rebuilding"
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$is_rebuild" = true ]; then
+  rebuild "${apps[@]}"
+fi
+
+for app in "${apps[@]}"; do
+  start $app
+done
+
