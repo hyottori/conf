@@ -1,6 +1,5 @@
 #!/bin/bash
-S=ct2-servers
-C=~/ct/careertrek2
+C=~/prog/careertrek
 CONTAINERS='mysql localstack elasticsearch logstash-candidate logstash-job localstack_initializer localstack'
 
 DIR_FMT="%s-client"
@@ -8,13 +7,7 @@ TARGET_FMT="classes:%s"
 
 cd $C
 
-function running {
-  "$(docker inspect -f '{{.State.Running}}' mysql 2> /dev/null)"
-}
-
 function rebuild {
-  echo "Launching containers..."
-  echo "$(docker-compose up -d $CONTAINERS)"
   echo "Rebuilding api..."
   for target in $@; do
     echo "$(yarn generate:classes:$target)"
@@ -23,7 +16,7 @@ function rebuild {
   echo "$(./gradlew flywayClean flywayMigrate jooqGenerate)"
   echo "$(./careertrek.sh restore)"
   echo "Recreating elasticsearch..."
-  echo "$(./gradlew elasticRecreate elasticGenerate)" 
+  echo "$(./careertrek.sh es-recreate all)" 
   echo "Finished rebuilding!"
 }
 
@@ -39,12 +32,9 @@ function start {
 }
 
 apps=()
-is_rebuild=true
-if running; then
-  is_rebuild=false
-fi
+is_rebuild=false
 
-while getopts ":creatf" opt; do
+while getopts ":creatb" opt; do
   case ${opt} in
     c)
       apps+=("candidate")
@@ -64,21 +54,24 @@ while getopts ":creatf" opt; do
       echo "Finished!"
       exit 0
       ;;
-    f)
+    b)
       is_rebuild=true
       ;;
     ?)
-      echo "usage: $0 [-c] [-r] [-e] [-a] [-t] [-f]"
+      echo "usage: $0 [-c] [-r] [-e] [-a] [-t] [-b]"
       echo "-c: candidate"
       echo "-r: cRs/business"
       echo "-e: Ess/agent"
       echo "-a: Admin"
       echo "-t: Test"
-      echo "-f: force rebuilding"
+      echo "-b: rebuild classes"
       exit 1
       ;;
   esac
 done
+
+echo "Launching containers..."
+echo "$(docker-compose up --remove-orphans -d $CONTAINERS)"
 
 if [ "$is_rebuild" = true ]; then
   rebuild "${apps[@]}"
@@ -87,4 +80,3 @@ fi
 for app in "${apps[@]}"; do
   start $app
 done
-
